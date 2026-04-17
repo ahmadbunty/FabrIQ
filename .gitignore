@@ -1,0 +1,45 @@
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+
+# Backend
+backend/__pycache__/
+backend/uploads/
+backend/*.pyc
+backend/.env
+backend/venv/
+
+# Model files (large)
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Dataset and training artifacts
+runs/
+FabrIQ_Final_Dataset/
+FabrIQ_YOLO_Detection_Dataset/
+*.cache
+*.log
+*.mp4
+*.avi
+*.mov
+
+# Python cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+

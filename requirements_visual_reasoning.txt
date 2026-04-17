@@ -1,0 +1,34 @@
+# Visual Reasoning Pipeline Requirements
+
+# Core ML Framework
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Vision Transformers
+timm>=0.9.0
+
+# CLIP
+git+https://github.com/openai/CLIP.git
+# Alternative: pip install git+https://github.com/openai/CLIP.git
+ftfy
+regex
+
+# Image Processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0,<2.0.0
+
+# Data Handling
+PyYAML>=6.0
+pandas>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Dimensionality Reduction
+scikit-learn>=1.3.0
+
+# Utilities
+tqdm>=4.65.0
+

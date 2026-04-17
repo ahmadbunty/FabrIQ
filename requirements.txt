@@ -1,0 +1,28 @@
+# YOLOv8 Training Requirements for FabrIQ Fabric Defect Detection
+
+# Core ML Framework
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Image Processing
+opencv-python>=4.8.0,<4.12.0
+Pillow>=10.0.0
+numpy>=1.24.0,<2.0.0  # PyTorch requires numpy<2.0
+
+# Data Handling
+PyYAML>=6.0
+pandas>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Utilities
+tqdm>=4.65.0
+pyyaml>=6.0
+
+# Optional: For better performance
+# CUDA toolkit (install separately if using GPU)
+# tensorrt>=8.6.0  # For TensorRT export (optional)
+

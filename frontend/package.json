@@ -1,0 +1,36 @@
+{
+  "name": "fabriq-frontend",
+  "version": "1.0.0",
+  "description": "FabrIQ - AI-Powered Fabric Defect Detection Dashboard",
+  "private": true,
+  "dependencies": {
+    "@emotion/react": "^11.11.1",
+    "@emotion/styled": "^11.11.0",
+    "@mui/icons-material": "^5.15.0",
+    "@mui/material": "^5.15.0",
+    "axios": "^1.6.2",
+    "date-fns": "^2.30.0",
+    "firebase": "^10.14.1",
+    "jspdf": "^2.5.1",
+    "jspdf-autotable": "^3.8.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-dropzone": "^14.2.3",
+    "react-hot-toast": "^2.4.1",
+    "react-router-dom": "^6.20.0",
+    "recharts": "^2.10.3",
+    "socket.io-client": "^4.5.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "eslint": "^8.55.0",
+    "eslint-plugin-react": "^7.33.2",
+    "vite": "^5.0.8"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0"
+  }
+}
