@@ -1,25 +1,13 @@
-path: C:\Users\hp\Desktop\FabrIQ_dataset\FabrIQ_YOLO_Detection_Dataset
+# FabrIQ YOLO — 7 classes (indices 0–6 must match backend CLASSES and trained weights)
+path: FabrIQ_YOLO_Detection_Dataset
 train: train/images
 val: val/images
-nc: 20
+nc: 7
 names:
-  0: bad needle line
-  1: creases
-  2: double kunda
-  3: end out
-  4: fluff knit
-  5: fly yarn
-  6: knit hole
-  7: lycra short
-  8: mis pattern
-  9: mix yarn
-  10: normal
-  11: oil lines
-  12: oil spot
-  13: press off
-  14: pulling thread
-  15: run of needle
-  16: single kunda
-  17: sinker line
-  18: tight feeder
-  19: yarn variation
+  0: contamination
+  1: selvet
+  2: gray_stitch
+  3: cut
+  4: baekra
+  5: color_issue
+  6: stain

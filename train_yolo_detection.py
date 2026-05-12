@@ -30,12 +30,15 @@ except:
     IMG_SIZE = 416
     BATCH_SIZE = 4
 
-# 20 Target Classes
+# 7 defect classes (order must match fabriq_detection_data.yaml and trained weights)
 CLASSES = [
-    'bad needle line', 'creases', 'double kunda', 'end out', 'fluff knit',
-    'fly yarn', 'knit hole', 'lycra short', 'mis pattern', 'mix yarn',
-    'normal', 'oil lines', 'oil spot', 'press off', 'pulling thread',
-    'run of needle', 'single kunda', 'sinker line', 'tight feeder', 'yarn variation'
+    'contamination',
+    'selvet',
+    'gray_stitch',
+    'cut',
+    'baekra',
+    'color_issue',
+    'stain',
 ]
 
 def create_data_yaml():

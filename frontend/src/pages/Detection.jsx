@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Box,
   Paper,
@@ -39,6 +39,7 @@ export default function Detection() {
   const [selectedCameraIndex, setSelectedCameraIndex] = useState(0)
   const [customCameraIndex, setCustomCameraIndex] = useState('0')
   const [isCustomCamera, setIsCustomCamera] = useState(false)
+  const lastStoredLiveFrameRef = useRef(0)
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: {
@@ -78,7 +79,12 @@ export default function Detection() {
 
           // For image uploads, store image in Firebase Storage once and reuse URL
           if (!isVideoFile) {
-            imageUrl = await uploadDefectImage(file, fabricId)
+            try {
+              imageUrl = await uploadDefectImage(file, fabricId)
+            } catch (uploadError) {
+              // Save defect records even if Storage upload fails.
+              console.warn('Image upload failed, saving Firestore records without image URL', uploadError)
+            }
           }
 
           await Promise.all(
@@ -117,6 +123,7 @@ export default function Detection() {
       setLiveStreamUrl(`${baseUrl}/api/live/stream?token=${encodeURIComponent(token || '')}&t=${Date.now()}`)
       setIsStreaming(true)
       setIsLiveDetecting(true)
+      lastStoredLiveFrameRef.current = 0
       toast.success(
         `Live stream started${startResp?.data?.cameraIndex !== undefined ? ` (camera ${startResp.data.cameraIndex})` : ''}`
       )
@@ -168,6 +175,41 @@ export default function Detection() {
     }
     loadCameraSources()
   }, [])
+
+  useEffect(() => {
+    if (!isStreaming) return undefined
+
+    const intervalId = setInterval(async () => {
+      try {
+        const response = await api.get('/live/latest')
+        const payload = response.data || {}
+        const frameId = Number(payload.frameId || 0)
+        const defects = Array.isArray(payload.defects) ? payload.defects : []
+        const cameraIdx = payload.cameraIndex ?? selectedCameraIndex
+
+        if (frameId <= lastStoredLiveFrameRef.current || defects.length === 0) {
+          return
+        }
+
+        const fabricId = `LIVE-CAM-${cameraIdx}-${Date.now()}`
+        await Promise.all(
+          defects.map((defect) =>
+            addDefectRecord({
+              fabric_id: fabricId,
+              defect_type: defect.class,
+              confidence: defect.confidence,
+              image_url: '',
+            })
+          )
+        )
+        lastStoredLiveFrameRef.current = frameId
+      } catch (error) {
+        console.error('Live Firestore sync failed:', error?.response?.data || error.message)
+      }
+    }, 2000)
+
+    return () => clearInterval(intervalId)
+  }, [isStreaming, selectedCameraIndex])
 
   useEffect(() => {
     return () => {

@@ -21,12 +21,15 @@ try:
 except:
     DEVICE = "cpu"
 
-# 20 Target Classes
+# 7 defect classes (slugs; must match filenames FabrIQ_<slug>_<idx>.jpg)
 CLASSES = [
-    'bad needle line', 'creases', 'double kunda', 'end out', 'fluff knit',
-    'fly yarn', 'knit hole', 'lycra short', 'mis pattern', 'mix yarn',
-    'normal', 'oil lines', 'oil spot', 'press off', 'pulling thread',
-    'run of needle', 'single kunda', 'sinker line', 'tight feeder', 'yarn variation'
+    'contamination',
+    'selvet',
+    'gray_stitch',
+    'cut',
+    'baekra',
+    'color_issue',
+    'stain',
 ]
 
 def prepare_classification_dataset():
@@ -63,10 +66,8 @@ def prepare_classification_dataset():
                 class_name = '_'.join(class_parts)
                 
                 # Map back to original class name with spaces
-                class_name_with_spaces = class_name.replace('_', ' ')
-                
-                if class_name_with_spaces in CLASSES:
-                    dest_folder = yolo_dataset / split / class_name
+                if class_name in CLASSES:
+                    dest_folder = yolo_dataset / split / class_name.replace(' ', '_')
                     dest_file = dest_folder / img_file.name
                     
                     # Copy file

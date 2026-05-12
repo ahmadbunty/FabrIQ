@@ -10,12 +10,15 @@ import shutil
 DATASET_PATH = Path("FabrIQ_Final_Dataset")
 OUTPUT_PATH = Path("FabrIQ_YOLO_Detection_Dataset")
 
-# 20 Target Classes
+# 7 defect classes (must match organize_dataset / fabriq_detection_data.yaml)
 CLASSES = [
-    'bad needle line', 'creases', 'double kunda', 'end out', 'fluff knit',
-    'fly yarn', 'knit hole', 'lycra short', 'mis pattern', 'mix yarn',
-    'normal', 'oil lines', 'oil spot', 'press off', 'pulling thread',
-    'run of needle', 'single kunda', 'sinker line', 'tight feeder', 'yarn variation'
+    'contamination',
+    'selvet',
+    'gray_stitch',
+    'cut',
+    'baekra',
+    'color_issue',
+    'stain',
 ]
 
 def create_full_image_annotation(image_path, class_name):
@@ -66,15 +69,14 @@ def create_annotations():
                 # Reconstruct class name
                 class_parts = parts[1:-1]
                 class_name = '_'.join(class_parts)
-                class_name_with_spaces = class_name.replace('_', ' ')
-                
-                if class_name_with_spaces in CLASSES:
+                class_slug = class_name  # filename uses underscores, e.g. gray_stitch
+                if class_slug in CLASSES:
                     # Copy image
                     dest_img = OUTPUT_PATH / split / 'images' / img_file.name
                     shutil.copy2(img_file, dest_img)
                     
                     # Create annotation
-                    annotation = create_full_image_annotation(img_file, class_name_with_spaces)
+                    annotation = create_full_image_annotation(img_file, class_slug)
                     if annotation:
                         label_file = OUTPUT_PATH / split / 'labels' / f"{img_file.stem}.txt"
                         with open(label_file, 'w') as f:

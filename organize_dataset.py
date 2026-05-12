@@ -10,53 +10,45 @@ OUTPUT_FOLDER_NAME = 'FabrIQ_Final_Dataset'
 TRAIN_RATIO = 0.8  # 80% Train, 20% Validation
 SEED = 42          # For reproducible results
 
-# 1. The 20 Target Classes for your FYP
+# 1. Seven target defect classes (slug form; used in FabrIQ_<slug>_<idx>.jpg)
 TARGET_CLASSES = [
-    'bad needle line', 'creases', 'double kunda', 'end out', 'fluff knit',
-    'fly yarn', 'knit hole', 'lycra short', 'mis pattern', 'mix yarn',
-    'normal', 'oil lines', 'oil spot', 'press off', 'pulling thread',
-    'run of needle', 'single kunda', 'sinker line', 'tight feeder', 'yarn variation'
+    'contamination',
+    'selvet',
+    'gray_stitch',
+    'cut',
+    'baekra',
+    'color_issue',
+    'stain',
 ]
 
-# 2. The "Smart Mapping" Dictionary
-# Maps generic research terms to your specific Industry Terms
+# 2. Map folder / filename keywords → target slug (longer keys matched first)
 CLASS_MAPPING = {
-    # --- Exact or Clear Matches ---
-    'normal': 'normal', 'good': 'normal', 'defect free': 'normal', 'no defect': 'normal',
-    'hole': 'knit hole', 'holes': 'knit hole', 'cut': 'knit hole',
-    'oil': 'oil spot', 'stain': 'oil spot', 'dirty': 'oil spot',
-    'fuzzyball': 'fluff knit', 'contamination': 'fluff knit',
-    'foreign': 'fly yarn', 'fly': 'fly yarn',
-
-    # --- The "Proxy" Matches (Critical for filling specific folders) ---
-    # Using 'Vertical Lines' / 'Broken Pick' as proxies for Kunda defects
-    'vertical': 'bad needle line',
-    'broken pick': 'single kunda',  
-    'end out': 'double kunda',      
-    
-    # Using 'Horizontal Lines' for Sinker/Feeder issues
-    'horizontal': 'sinker line',
-    'line': 'sinker line',
-    'crack': 'tight feeder',
-    'thick': 'tight feeder', 
-
-    # Texture issues
-    'nep': 'yarn variation',
-    'knot': 'yarn variation',
-    'variation': 'yarn variation',
-    'crease': 'creases',
-    'wrinkle': 'creases',
-    
-    # Knitting Structure Errors
-    'selvage': 'press off',
-    'pattern': 'mis pattern',
-    'mispattern': 'mis pattern',
-    'thread': 'pulling thread',
-    'pulling': 'pulling thread',
-    'broken end': 'run of needle',
-    'needle': 'run of needle',
-    'weft': 'lycra short',         
-    'color': 'mix yarn',
+    'contamination': 'contamination',
+    'contaminant': 'contamination',
+    'dirt': 'contamination',
+    'foreign': 'contamination',
+    'selvet': 'selvet',
+    'selvedge': 'selvet',
+    'selvage': 'selvet',
+    'gray stitch': 'gray_stitch',
+    'graystitch': 'gray_stitch',
+    'gray_stitch': 'gray_stitch',
+    'stitch': 'gray_stitch',
+    'cut': 'cut',
+    'tear': 'cut',
+    'hole': 'cut',
+    'baekra': 'baekra',
+    'bakra': 'baekra',
+    'color issue': 'color_issue',
+    'color issues': 'color_issue',
+    'color_issue': 'color_issue',
+    'shade': 'color_issue',
+    'shading': 'color_issue',
+    'wrong color': 'color_issue',
+    'stain': 'stain',
+    'oil': 'stain',
+    'spot': 'stain',
+    'dirty': 'stain',
 }
 
 def normalize_name(name):
@@ -65,15 +57,21 @@ def normalize_name(name):
 
 def find_target_class(folder_name, file_name, full_path):
     """Decides which FabrIQ class an image belongs to."""
-    # Convert everything to lowercase for matching
-    search_terms = normalize_name(folder_name).split() + normalize_name(file_name).split()
     path_str = str(full_path).lower()
+    folder_slug = normalize_name(folder_name).replace(' ', '_')
 
-    # Priority 1: Check if path contains "normal" or "good"
-    if any(x in path_str for x in ['nodefect', 'no defect', 'defect free', 'good']):
-        return 'normal'
+    # Priority 0: Folder name is already a target slug
+    if folder_slug in TARGET_CLASSES:
+        return folder_slug
+    for cls in TARGET_CLASSES:
+        if cls.replace('_', ' ') == normalize_name(folder_name):
+            return cls
 
-    # Priority 2: Check our Mapping Dictionary
+    # Skip clearly non-defect samples (optional)
+    if any(x in path_str for x in ['nodefect', 'no defect', 'defect free', 'good', 'normal']):
+        return None
+
+    # Priority 1: Check our Mapping Dictionary
     # We check longer keys first (e.g., match 'oil spot' before 'oil')
     sorted_keys = sorted(CLASS_MAPPING.keys(), key=len, reverse=True)
     
@@ -89,13 +87,7 @@ def find_target_class(folder_name, file_name, full_path):
         if key in f_file_norm:
             return CLASS_MAPPING[key]
 
-    # Priority 3: Default Fail-safe
-    # If we find a generic "defect" folder but don't know which, put it in 'mix yarn'
-    # so we don't lose data.
-    if 'defect' in path_str:
-        return 'mix yarn'
-        
-    return None # Skip this file if we can't identify it
+    return None
 
 def organize():
     print(f"🚀 Starting FabrIQ Data Pipeline...")

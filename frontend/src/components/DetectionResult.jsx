@@ -9,6 +9,7 @@ import {
   AccordionDetails,
 } from '@mui/material'
 import { CheckCircle, Cancel, ExpandMore, LocationOn } from '@mui/icons-material'
+import { formatDefectLabel } from '../api/defectsApi'
 
 export default function DetectionResult({ results }) {
   const { defects = [], annotatedImage, annotatedVideo, imageWidth, imageHeight, isVideo } = results
@@ -63,7 +64,7 @@ export default function DetectionResult({ results }) {
             <AccordionSummary expandIcon={<ExpandMore />}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
                 <Chip
-                  label={defect.class}
+                  label={formatDefectLabel(defect.class)}
                   size="small"
                   color="error"
                   icon={<Cancel />}

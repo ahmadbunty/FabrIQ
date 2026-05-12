@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { List, ListItem, ListItemText, Typography } from '@mui/material'
-import { getRecentDetectionsFromFirestore } from '../api/defectsApi'
+import { getRecentDetectionsFromFirestore, formatDefectLabel } from '../api/defectsApi'
 
 export default function RecentDetections() {
   const [detections, setDetections] = useState([])
@@ -67,7 +67,7 @@ export default function RecentDetections() {
           <ListItemText
             primary={
               <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                {detection.class}
+                {formatDefectLabel(detection.class)}
               </Typography>
             }
             secondary={

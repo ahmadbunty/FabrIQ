@@ -11,17 +11,54 @@ import { db, storage } from '../database/firebase'
 
 const DEFECTS_COLLECTION = 'defects'
 
-function normalizeDefectType(defectType) {
+/** Canonical Firestore defect_type slugs (7 classes, same as backend YOLO names). */
+export const DEFECT_TYPES = [
+  'contamination',
+  'selvet',
+  'gray_stitch',
+  'cut',
+  'baekra',
+  'color_issue',
+  'stain',
+]
+
+/**
+ * Normalize API / legacy labels to canonical slug.
+ */
+export function normalizeDefectType(defectType) {
+  if (!defectType) return 'contamination'
+  const key = String(defectType).trim().toLowerCase().replace(/\s+/g, '_')
+
   const map = {
-    hole: 'hole',
-    oil_spot: 'stain',
+    // canonical
+    contamination: 'contamination',
+    selvet: 'selvet',
+    selvedge: 'selvet',
+    gray_stitch: 'gray_stitch',
+    graystitch: 'gray_stitch',
+    cut: 'cut',
+    baekra: 'baekra',
+    bakra: 'baekra',
+    color_issue: 'color_issue',
+    color_issues: 'color_issue',
     stain: 'stain',
-    thread_error: 'broken_thread',
-    broken_thread: 'broken_thread',
-    objects: 'misweave',
-    misweave: 'misweave',
+    // legacy app names → closest new class
+    hole: 'cut',
+    objects: 'contamination',
+    oil_spot: 'stain',
+    thread_error: 'gray_stitch',
+    misweave: 'selvet',
+    broken_thread: 'gray_stitch',
   }
-  return map[defectType] || 'misweave'
+  if (DEFECT_TYPES.includes(key)) return key
+  return map[key] || 'contamination'
+}
+
+export function formatDefectLabel(slug) {
+  if (!slug) return 'Unknown'
+  return String(slug)
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 /**
@@ -43,7 +80,6 @@ export async function uploadDefectImage(file, fabricId) {
 
 /**
  * Adds a new defect record to Firestore.
- * defect_type must be one of: hole, stain, broken_thread, misweave
  */
 export async function addDefectRecord({
   fabric_id,
@@ -55,10 +91,9 @@ export async function addDefectRecord({
     throw new Error('Firebase Firestore not initialized. Check frontend/.env Firebase keys.')
   }
   const normalizedType = normalizeDefectType(defect_type)
-  const allowedDefects = ['hole', 'stain', 'broken_thread', 'misweave']
-  if (!allowedDefects.includes(normalizedType)) {
+  if (!DEFECT_TYPES.includes(normalizedType)) {
     throw new Error(
-      `Invalid defect_type "${defect_type}". Allowed: ${allowedDefects.join(', ')}`
+      `Invalid defect_type "${defect_type}". Allowed: ${DEFECT_TYPES.join(', ')}`
     )
   }
 
@@ -141,7 +176,7 @@ export async function getDashboardStatsFromFirestore() {
       ? defects.reduce((sum, d) => sum + Number(d.confidence || 0), 0) / defects.length
       : 0
   const qualityScore = Math.round(avgConfidence * 100)
-  const avgProcessingTime = 245 // placeholder until timing data is stored
+  const avgProcessingTime = 245
 
   return {
     totalInspections,

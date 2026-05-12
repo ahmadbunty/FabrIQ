@@ -15,7 +15,7 @@ import {
   Typography,
 } from '@mui/material'
 import RefreshIcon from '@mui/icons-material/Refresh'
-import { getAllDefects } from '../api/defectsApi'
+import { getAllDefects, formatDefectLabel } from '../api/defectsApi'
 
 function formatTimestamp(ts) {
   if (!ts) return 'Pending...'
@@ -121,7 +121,7 @@ export default function DefectsTable() {
                   </TableCell>
                   <TableCell>{row.fabric_id || 'N/A'}</TableCell>
                   <TableCell>
-                    <Chip label={row.defect_type || 'unknown'} size="small" color="error" />
+                    <Chip label={formatDefectLabel(row.defect_type || '')} size="small" color="error" />
                   </TableCell>
                   <TableCell>{confidenceLabel(row.confidence)}</TableCell>
                   <TableCell>{formatTimestamp(row.timestamp)}</TableCell>

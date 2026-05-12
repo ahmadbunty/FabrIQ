@@ -9,12 +9,15 @@ from ultralytics import YOLO
 import cv2
 import numpy as np
 
-# 20 Target Classes
+# Detection / classification labels (7 defect classes; order = class index 0..6)
 CLASSES = [
-    'bad needle line', 'creases', 'double kunda', 'end out', 'fluff knit',
-    'fly yarn', 'knit hole', 'lycra short', 'mis pattern', 'mix yarn',
-    'normal', 'oil lines', 'oil spot', 'press off', 'pulling thread',
-    'run of needle', 'single kunda', 'sinker line', 'tight feeder', 'yarn variation'
+    'contamination',
+    'selvet',
+    'gray_stitch',
+    'cut',
+    'baekra',
+    'color_issue',
+    'stain',
 ]
 
 def classify_image(model_path, image_path, conf_threshold=0.25):

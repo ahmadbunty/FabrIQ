@@ -32,31 +32,35 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 try:
     import torch.serialization as ts
     from ultralytics.nn.tasks import DetectionModel
-    ts.add_safe_globals([DetectionModel])
-    print("✅ PyTorch 2.6 compatibility fix applied")
+    if hasattr(ts, "add_safe_globals"):
+        ts.add_safe_globals([DetectionModel])
+        print("✅ PyTorch 2.6 compatibility fix applied")
+    else:
+        print("ℹ️ torch.serialization.add_safe_globals not available; skipping (older PyTorch)")
 except Exception as e:
     print(f"⚠️ Could not apply PyTorch fix: {e}")
 
 # Load YOLO model (update path to your trained model)
-# Priority: ENV(FABRIQ_MODEL_PATH) > relative > absolute > yolov8n.pt
+# Priority: ENV(FABRIQ_MODEL_PATH) > repo-root better.pt > cwd-relative better.pt > yolov8n.pt
 MODEL_PATH_ENV = os.getenv("FABRIQ_MODEL_PATH")
-MODEL_PATH_RELATIVE = Path("runs/detect/fabriq_defect_detection/weights/bestest.pt")
-MODEL_PATH_ABSOLUTE = Path(r"C:\Users\hp\Desktop\FabrIQ_dataset\runs\detect\fabriq_defect_detection\weights\bestest.pt")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+MODEL_PATH_BETTER_REPO = _REPO_ROOT / "runs" / "detect" / "fabriq_defect_detection" / "weights" / "better.pt"
+MODEL_PATH_BETTER_CWD = Path("runs/detect/fabriq_defect_detection/weights/better.pt")
 
 MODEL_PATH = None
 if MODEL_PATH_ENV and Path(MODEL_PATH_ENV).expanduser().exists():
     MODEL_PATH = str(Path(MODEL_PATH_ENV).expanduser().resolve())
     print(f"📁 Found model (env): {MODEL_PATH}")
-elif MODEL_PATH_RELATIVE.exists():
-    MODEL_PATH = str(MODEL_PATH_RELATIVE.resolve())
-    print(f"📁 Found model (relative): {MODEL_PATH}")
-elif MODEL_PATH_ABSOLUTE.exists():
-    MODEL_PATH = str(MODEL_PATH_ABSOLUTE.resolve())
-    print(f"📁 Found model (absolute): {MODEL_PATH}")
+elif MODEL_PATH_BETTER_REPO.exists():
+    MODEL_PATH = str(MODEL_PATH_BETTER_REPO.resolve())
+    print(f"📁 Found model (repo): {MODEL_PATH}")
+elif MODEL_PATH_BETTER_CWD.exists():
+    MODEL_PATH = str(MODEL_PATH_BETTER_CWD.resolve())
+    print(f"📁 Found model (relative to cwd): {MODEL_PATH}")
 else:
     # Fallback to pretrained model if trained model not found
     MODEL_PATH = "yolov8n.pt"
-    print("⚠️ Trained model not found, using pretrained yolov8n.pt")
+    print("⚠️ better.pt not found, using pretrained yolov8n.pt")
 
 # Load YOLO model
 model = None
@@ -78,12 +82,15 @@ except Exception as e:
         print(f"❌ CRITICAL: Could not load even pretrained model: {e2}")
         model = None
 
-# Class names (4 classes)
+# Class names (7 classes) — order MUST match your YOLO data.yaml / trained weights indices 0..6
 CLASSES = [
-    'hole',
-    'objects',
-    'oil_spot',
-    'thread_error',
+    'contamination',
+    'selvet',
+    'gray_stitch',
+    'cut',
+    'baekra',
+    'color_issue',
+    'stain',
 ]
 
 DEFAULT_CAMERA_INDEX = int(os.getenv("FABRIQ_CAMERA_INDEX", "0"))
@@ -91,12 +98,22 @@ LIVE_CAMERA_INDEX = DEFAULT_CAMERA_INDEX
 live_camera = None
 live_streaming_active = False
 live_lock = threading.Lock()
+live_frame_id = 0
+live_latest_payload = {
+    'frameId': 0,
+    'timestamp': None,
+    'cameraIndex': LIVE_CAMERA_INDEX,
+    'defects': [],
+}
 
 COLORS = {
-    'hole': (0, 0, 255),
-    'objects': (0, 255, 0),
-    'oil_spot': (255, 0, 0),
-    'thread_error': (255, 165, 0),
+    'contamination': (0, 0, 255),
+    'selvet': (0, 255, 0),
+    'gray_stitch': (255, 0, 0),
+    'cut': (255, 165, 0),
+    'baekra': (180, 105, 255),
+    'color_issue': (0, 215, 255),
+    'stain': (42, 42, 165),
 }
 
 # Mock users (replace with database in production)
@@ -375,7 +392,7 @@ def stop_live_stream():
 
 
 def live_frame_generator():
-    global live_camera, live_streaming_active
+    global live_camera, live_streaming_active, live_frame_id, live_latest_payload
     while True:
         with live_lock:
             if not live_streaming_active or live_camera is None or not live_camera.isOpened():
@@ -387,7 +404,15 @@ def live_frame_generator():
             continue
 
         try:
-            annotated, _, _, _ = annotate_frame(frame, conf_threshold=0.25)
+            annotated, defects, _, _ = annotate_frame(frame, conf_threshold=0.25)
+            with live_lock:
+                live_frame_id += 1
+                live_latest_payload = {
+                    'frameId': live_frame_id,
+                    'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
+                    'cameraIndex': LIVE_CAMERA_INDEX,
+                    'defects': defects,
+                }
             success, buffer = cv2.imencode('.jpg', annotated)
             if not success:
                 continue
@@ -406,6 +431,16 @@ def live_stream():
         live_frame_generator(),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
+
+
+@app.route('/api/live/latest', methods=['GET'])
+@token_required
+def live_latest():
+    with live_lock:
+        payload = dict(live_latest_payload)
+        payload['defects'] = list(live_latest_payload.get('defects', []))
+        payload['isStreaming'] = live_streaming_active
+    return jsonify(payload), 200
 
 
 @app.route('/api/live/sources', methods=['GET'])
@@ -442,22 +477,10 @@ def get_recent_detections():
     now = datetime.utcnow()
     
     return jsonify([
-        {
-            'class': 'hole',
-            'timestamp': (now - timedelta(minutes=30)).isoformat() + 'Z',
-        },
-        {
-            'class': 'oil_spot',
-            'timestamp': (now - timedelta(minutes=25)).isoformat() + 'Z',
-        },
-        {
-            'class': 'objects',
-            'timestamp': (now - timedelta(hours=1)).isoformat() + 'Z',
-        },
-        {
-            'class': 'thread_error',
-            'timestamp': (now - timedelta(hours=2)).isoformat() + 'Z',
-        },
+        {'class': 'contamination', 'timestamp': (now - timedelta(minutes=30)).isoformat() + 'Z'},
+        {'class': 'stain', 'timestamp': (now - timedelta(minutes=25)).isoformat() + 'Z'},
+        {'class': 'gray_stitch', 'timestamp': (now - timedelta(hours=1)).isoformat() + 'Z'},
+        {'class': 'cut', 'timestamp': (now - timedelta(hours=2)).isoformat() + 'Z'},
     ]), 200
 
 @app.route('/api/analytics/defect-distribution', methods=['GET'])
@@ -465,10 +488,13 @@ def get_recent_detections():
 def get_defect_distribution():
     # Mock data - replace with database queries
     return jsonify([
-        {'name': 'hole', 'value': 35},
-        {'name': 'objects', 'value': 25},
-        {'name': 'oil_spot', 'value': 20},
-        {'name': 'thread_error', 'value': 15},
+        {'name': 'contamination', 'value': 22},
+        {'name': 'selvet', 'value': 18},
+        {'name': 'gray_stitch', 'value': 15},
+        {'name': 'cut', 'value': 12},
+        {'name': 'baekra', 'value': 10},
+        {'name': 'color_issue', 'value': 14},
+        {'name': 'stain', 'value': 20},
     ]), 200
 
 @app.route('/uploads/<path:filename>', methods=['GET'])

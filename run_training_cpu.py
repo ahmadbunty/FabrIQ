@@ -43,12 +43,15 @@ else:
     BATCH_SIZE = 16
     WORKERS = 4
 
-# 20 Target Classes
+# 7 defect classes (slugs)
 CLASSES = [
-    'bad needle line', 'creases', 'double kunda', 'end out', 'fluff knit',
-    'fly yarn', 'knit hole', 'lycra short', 'mis pattern', 'mix yarn',
-    'normal', 'oil lines', 'oil spot', 'press off', 'pulling thread',
-    'run of needle', 'single kunda', 'sinker line', 'tight feeder', 'yarn variation'
+    'contamination',
+    'selvet',
+    'gray_stitch',
+    'cut',
+    'baekra',
+    'color_issue',
+    'stain',
 ]
 
 def prepare_classification_dataset():
@@ -81,10 +84,8 @@ def prepare_classification_dataset():
             if len(parts) >= 2 and parts[0] == 'FabrIQ':
                 class_parts = parts[1:-1]
                 class_name = '_'.join(class_parts)
-                class_name_with_spaces = class_name.replace('_', ' ')
-                
-                if class_name_with_spaces in CLASSES:
-                    dest_folder = yolo_dataset / split / class_name
+                if class_name in CLASSES:
+                    dest_folder = yolo_dataset / split / class_name.replace(' ', '_')
                     dest_file = dest_folder / img_file.name
                     
                     import shutil
