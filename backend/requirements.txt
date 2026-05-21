@@ -1,9 +1,10 @@
-flask==3.0.0
-flask-cors==4.0.0
-werkzeug==3.0.1
-pyjwt==2.8.0
-ultralytics==8.0.196
-opencv-python==4.11.0.86
-numpy==1.26.4
-pillow==10.1.0
-
+# Flask 3.x needs Python 3.8+. On Jetson/old mirrors use: pip install -r requirements.txt
+# If Flask 3 is unavailable, pip will pick latest in range below (Flask 2.3+ works with this app).
+flask>=2.3.0,<4
+flask-cors>=4.0.0,<5
+werkzeug>=2.3.0,<4
+pyjwt>=2.8.0,<3
+ultralytics>=8.0.196,<9
+opencv-python>=4.8.0,<4.12
+numpy>=1.24.0,<2
+pillow>=10.0.0,<11

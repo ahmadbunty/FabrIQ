@@ -34,5 +34,40 @@ api.interceptors.response.use(
   }
 )
 
+function backendOrigin() {
+  return (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '')
+}
+
+/**
+ * Turn backend upload paths into a URL the browser can load (Vite proxies /api in dev).
+ */
+export function resolveUploadMediaUrl(pathOrUrl) {
+  if (!pathOrUrl) return null
+  if (pathOrUrl.startsWith('data:') || pathOrUrl.startsWith('blob:')) return pathOrUrl
+
+  let path = pathOrUrl
+  if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
+    try {
+      const u = new URL(pathOrUrl)
+      if (u.pathname.startsWith('/uploads/') || u.pathname.startsWith('/api/uploads/')) {
+        path = u.pathname.startsWith('/api/') ? u.pathname : `/api${u.pathname}`
+      } else {
+        return pathOrUrl
+      }
+    } catch {
+      return pathOrUrl
+    }
+  } else if (path.startsWith('/uploads/')) {
+    path = `/api${path}`
+  } else if (!path.startsWith('/api/uploads/')) {
+    path = `/api/uploads/${path.replace(/^\/+/, '')}`
+  }
+
+  if (import.meta.env.DEV) {
+    return path
+  }
+  return `${backendOrigin()}${path}`
+}
+
 export default api
 

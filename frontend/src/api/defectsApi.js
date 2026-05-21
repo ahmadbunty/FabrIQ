@@ -7,7 +7,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore'
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
-import { db, storage } from '../database/firebase'
+import { db, ensureFirebaseAuth, storage } from '../database/firebase'
 
 const DEFECTS_COLLECTION = 'defects'
 
@@ -68,6 +68,7 @@ export async function uploadDefectImage(file, fabricId) {
   if (!storage) {
     throw new Error('Firebase Storage not initialized. Check frontend/.env Firebase keys.')
   }
+  await ensureFirebaseAuth()
   const safeFabricId = fabricId || 'unknown_fabric'
   const fileName = `${Date.now()}_${file.name}`
   const filePath = `defects/${safeFabricId}/${fileName}`
@@ -86,10 +87,14 @@ export async function addDefectRecord({
   defect_type,
   confidence,
   image_url,
+  tracking_id,
+  distance_meters,
+  tracking_event,
 }) {
   if (!db) {
     throw new Error('Firebase Firestore not initialized. Check frontend/.env Firebase keys.')
   }
+  await ensureFirebaseAuth()
   const normalizedType = normalizeDefectType(defect_type)
   if (!DEFECT_TYPES.includes(normalizedType)) {
     throw new Error(
@@ -103,6 +108,15 @@ export async function addDefectRecord({
     confidence: Number(confidence ?? 0),
     image_url: image_url || '',
     timestamp: serverTimestamp(),
+  }
+  if (tracking_id != null && tracking_id !== '') {
+    payload.tracking_id = Number(tracking_id)
+  }
+  if (distance_meters != null && !Number.isNaN(Number(distance_meters))) {
+    payload.distance_meters = Number(distance_meters)
+  }
+  if (tracking_event) {
+    payload.tracking_event = String(tracking_event)
   }
 
   const docRef = await addDoc(collection(db, DEFECTS_COLLECTION), payload)
@@ -135,12 +149,30 @@ export async function getAllDefects() {
   if (!db) {
     throw new Error('Firebase Firestore not initialized. Check frontend/.env Firebase keys.')
   }
-  const q = query(collection(db, DEFECTS_COLLECTION), orderBy('timestamp', 'desc'))
-  const snap = await getDocs(q)
-  return snap.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }))
+  await ensureFirebaseAuth()
+  let snap
+  try {
+    // Preferred path: server-side ordering when index/rules allow it.
+    const q = query(collection(db, DEFECTS_COLLECTION), orderBy('timestamp', 'desc'))
+    snap = await getDocs(q)
+  } catch (err) {
+    // Fallback: read without ordering, then sort client-side.
+    // This keeps dashboard widgets functional even when timestamp ordering fails.
+    const message = String(err?.message || '')
+    const isQueryConfigIssue =
+      message.includes('index') ||
+      message.includes('order by') ||
+      message.includes('FAILED_PRECONDITION')
+    if (!isQueryConfigIssue) throw err
+    snap = await getDocs(collection(db, DEFECTS_COLLECTION))
+  }
+
+  return snap.docs
+    .map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }))
+    .sort((a, b) => (toDate(b.timestamp)?.getTime() || 0) - (toDate(a.timestamp)?.getTime() || 0))
 }
 
 function toDate(ts) {

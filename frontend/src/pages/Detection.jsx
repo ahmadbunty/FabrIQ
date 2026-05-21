@@ -39,6 +39,8 @@ export default function Detection() {
   const [selectedCameraIndex, setSelectedCameraIndex] = useState(0)
   const [customCameraIndex, setCustomCameraIndex] = useState('0')
   const [isCustomCamera, setIsCustomCamera] = useState(false)
+  const [machineSpeedMps, setMachineSpeedMps] = useState('0.12')
+  const [pixelToCmRatio, setPixelToCmRatio] = useState('0.05')
   const lastStoredLiveFrameRef = useRef(0)
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -117,6 +119,8 @@ export default function Detection() {
         : selectedCameraIndex
       const startResp = await api.post('/live/start', {
         cameraIndex: cameraIndexToUse,
+        machineSpeedMps: Number.parseFloat(machineSpeedMps) || 0,
+        pixelToCmRatio: Number.parseFloat(pixelToCmRatio) || 0.05,
       })
       const token = localStorage.getItem('fabriq_token')
       const baseUrl = api.defaults.baseURL.replace(/\/api\/?$/, '')
@@ -166,9 +170,9 @@ export default function Detection() {
       } catch (error) {
         // fallback when endpoint is unavailable
         setCameraSources([
-          { label: 'Laptop Camera (0)', cameraIndex: 0 },
-          { label: 'USB/External Camera (1)', cameraIndex: 1 },
-          { label: 'Arducam / CSI Camera (2)', cameraIndex: 2 },
+          { label: 'Built-in webcam (0)', cameraIndex: 0 },
+          { label: 'USB / DroidCam or iVCam phone (1)', cameraIndex: 1 },
+          { label: 'Arducam / CSI / extra (2)', cameraIndex: 2 },
           { label: 'Custom Camera', cameraIndex: -1 },
         ])
       }
@@ -184,24 +188,28 @@ export default function Detection() {
         const response = await api.get('/live/latest')
         const payload = response.data || {}
         const frameId = Number(payload.frameId || 0)
-        const defects = Array.isArray(payload.defects) ? payload.defects : []
+        const logOnce = Array.isArray(payload.log_once_events) ? payload.log_once_events : []
         const cameraIdx = payload.cameraIndex ?? selectedCameraIndex
 
-        if (frameId <= lastStoredLiveFrameRef.current || defects.length === 0) {
+        if (frameId <= lastStoredLiveFrameRef.current) {
           return
         }
 
-        const fabricId = `LIVE-CAM-${cameraIdx}-${Date.now()}`
-        await Promise.all(
-          defects.map((defect) =>
-            addDefectRecord({
-              fabric_id: fabricId,
-              defect_type: defect.class,
-              confidence: defect.confidence,
-              image_url: '',
-            })
+        if (logOnce.length > 0) {
+          await Promise.all(
+            logOnce.map((ev) =>
+              addDefectRecord({
+                fabric_id: `LIVE-TID-${ev.tracking_id}-${cameraIdx}`,
+                defect_type: ev.class_name,
+                confidence: ev.confidence,
+                image_url: '',
+                tracking_id: ev.tracking_id,
+                distance_meters: ev.distance_meters,
+                tracking_event: ev.event || 'first_track',
+              })
+            )
           )
-        )
+        }
         lastStoredLiveFrameRef.current = frameId
       } catch (error) {
         console.error('Live Firestore sync failed:', error?.response?.data || error.message)
@@ -252,6 +260,18 @@ export default function Detection() {
               border: '1px solid rgba(0,0,0,0.05)',
             }}
           >
+            <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
+              <Typography variant="body2" component="div">
+                <strong>DroidCam, iVCam, etc. over USB:</strong> install the phone app and the PC client, plug in the
+                cable, and start <strong>USB mode</strong> in the client. The phone shows up as a normal webcam here—use{' '}
+                <strong>Camera Source</strong> (often index <strong>1</strong>) or <strong>Custom index</strong> until
+                the live preview is your phone. No stream URL is required for USB virtual cameras.
+                <br />
+                <strong>Solid green screen?</strong> Restart the backend after updating; FabrIQ now negotiates MJPEG and
+                alternate Windows drivers. In the DroidCam desktop app, set the feed to <strong>MJPEG</strong> and{' '}
+                <strong>640×480</strong> if you can, then stop and start the camera again here.
+              </Typography>
+            </Alert>
             <Box sx={{ mb: 2, display: 'flex', gap: 2 }}>
               <FormControl size="small" sx={{ minWidth: 240 }}>
                 <InputLabel>Camera Source</InputLabel>
@@ -273,9 +293,9 @@ export default function Detection() {
                   {(cameraSources.length > 0
                     ? cameraSources
                     : [
-                        { label: 'Laptop Camera (0)', cameraIndex: 0 },
-                        { label: 'USB/External Camera (1)', cameraIndex: 1 },
-                        { label: 'Arducam / CSI Camera (2)', cameraIndex: 2 },
+                        { label: 'Built-in webcam (0)', cameraIndex: 0 },
+                        { label: 'USB / DroidCam or iVCam phone (1)', cameraIndex: 1 },
+                        { label: 'Arducam / CSI / extra (2)', cameraIndex: 2 },
                         { label: 'Custom Camera', cameraIndex: -1 },
                       ]
                   ).map((src) => (
@@ -302,6 +322,26 @@ export default function Detection() {
                   sx={{ width: 140 }}
                 />
               )}
+              <TextField
+                size="small"
+                label="Roller speed (m/s)"
+                type="number"
+                inputProps={{ step: 0.01, min: 0 }}
+                value={machineSpeedMps}
+                onChange={(e) => setMachineSpeedMps(e.target.value)}
+                disabled={isStreaming}
+                sx={{ width: 150 }}
+              />
+              <TextField
+                size="small"
+                label="cm / pixel"
+                type="number"
+                inputProps={{ step: 0.001, min: 0 }}
+                value={pixelToCmRatio}
+                onChange={(e) => setPixelToCmRatio(e.target.value)}
+                disabled={isStreaming}
+                sx={{ width: 120 }}
+              />
               <Button
                 variant="contained"
                 startIcon={isStreaming ? <Stop /> : <PlayArrow />}

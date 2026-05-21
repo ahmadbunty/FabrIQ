@@ -7,6 +7,7 @@ from flask import Flask, request, jsonify, send_from_directory, url_for, Respons
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
+import mimetypes
 import jwt
 import datetime
 import base64
@@ -17,11 +18,15 @@ import numpy as np
 from pathlib import Path
 import threading
 import time
+import sys
+from typing import Any, Dict, List, Optional, Tuple
+
+from fabriq_tracking import FabricInspectionPipeline, bbox_iou
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'fabriq-secret-key-change-in-production'
 app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # allow video uploads (200MB)
 
 CORS(app)
 
@@ -104,7 +109,71 @@ live_latest_payload = {
     'timestamp': None,
     'cameraIndex': LIVE_CAMERA_INDEX,
     'defects': [],
+    'tracked_defects': [],
+    'log_once_events': [],
+    'roll_distance_meters': 0.0,
 }
+
+# Live session: IoU tracking + roll distance (reset on /live/start and /live/stop)
+live_pipeline: Optional[FabricInspectionPipeline] = None
+# Calibration: cm of fabric travel per pixel in image (set via env or POST /live/start body)
+PIXEL_TO_CM_RATIO = float(os.getenv('FABRIQ_PIXEL_TO_CM_RATIO', '0.05'))
+DEFAULT_MACHINE_SPEED_MPS = float(os.getenv('FABRIQ_MACHINE_SPEED_MPS', '0.0'))
+
+def _likely_solid_green_screen(frame):
+    """Detect classic virtual-webcam 'green screen' (decoder/format glitch), not real green fabric."""
+    if frame is None or frame.size == 0 or frame.ndim != 3 or frame.shape[2] < 3:
+        return False
+    b, g, r = cv2.split(frame)
+    mg, mr, mb = float(g.mean()), float(r.mean()), float(b.mean())
+    if mg < 210 or mr > 90 or mb > 90:
+        return False
+    if float(g.std()) > 14 or float(r.std()) > 14 or float(b.std()) > 14:
+        return False
+    return True
+
+
+def _open_local_camera(index: int):
+    """Open a local capture device.
+
+    On Windows, virtual webcams (DroidCam, iVCam) often show a solid green image when OpenCV
+    uses the wrong backend or unpacks YUY2 incorrectly. Prefer DirectShow + MJPEG, then fall back.
+    """
+    if sys.platform != 'win32':
+        return cv2.VideoCapture(index)
+
+    mjpg = cv2.VideoWriter_fourcc(*'MJPG')
+    specs = [
+        (cv2.CAP_DSHOW, mjpg),
+        (cv2.CAP_DSHOW, None),
+        (cv2.CAP_MSMF, mjpg),
+        (cv2.CAP_MSMF, None),
+    ]
+    for backend, fourcc in specs:
+        cap = cv2.VideoCapture(index, backend)
+        if not cap.isOpened():
+            cap.release()
+            continue
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+        if fourcc is not None:
+            cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+        # Virtual cams are happiest at common sizes after FOURCC is set
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        for _ in range(12):
+            ok, frame = cap.read()
+            if not ok or frame is None or frame.size == 0:
+                continue
+            if _likely_solid_green_screen(frame):
+                continue
+            return cap
+        cap.release()
+
+    return cv2.VideoCapture(index)
+
 
 COLORS = {
     'contamination': (0, 0, 255),
@@ -151,10 +220,10 @@ def token_required(f):
     return decorated
 
 
-def annotate_frame(frame, conf_threshold=0.25):
-    annotated = frame.copy()
+def run_yolo_detection(frame, conf_threshold=0.25) -> Tuple[List[Dict[str, Any]], int, int]:
+    """Run YOLO once; return raw defect dicts (class, confidence, bbox, bbox_normalized) and frame size."""
     frame_h, frame_w = frame.shape[:2]
-    defects = []
+    defects: List[Dict[str, Any]] = []
     results = model(frame, conf=conf_threshold)
 
     for result in results:
@@ -167,35 +236,114 @@ def annotate_frame(frame, conf_threshold=0.25):
 
             class_name = CLASSES[cls]
             x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
-            color = COLORS.get(class_name, (255, 165, 0))
-
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-            label = f"{class_name}: {conf:.2f}"
-            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-            label_y = max(y1 - 10, label_size[1] + 10)
-            cv2.rectangle(
-                annotated,
-                (x1, label_y - label_size[1] - 5),
-                (x1 + label_size[0], label_y + 5),
-                color,
-                -1
-            )
-            cv2.putText(
-                annotated,
-                label,
-                (x1, label_y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2
-            )
             defects.append({
                 'class': class_name,
                 'confidence': conf,
                 'bbox': [int(x1), int(y1), int(x2), int(y2)],
-                'bbox_normalized': [x1/frame_w, y1/frame_h, x2/frame_w, y2/frame_h],
+                'bbox_normalized': [x1 / frame_w, y1 / frame_h, x2 / frame_w, y2 / frame_h],
             })
 
+    return defects, frame_w, frame_h
+
+
+def annotate_from_detections(frame, rows: List[Dict[str, Any]]) -> Any:
+    """Draw boxes/labels from detection or tracked rows (keys: class or class_name, bbox or bounding_box)."""
+    annotated = frame.copy()
+    for row in rows:
+        cls = row.get('class_name') or row.get('class')
+        bbox = row.get('bounding_box') or row.get('bbox')
+        if not cls or not bbox or len(bbox) != 4:
+            continue
+        x1, y1, x2, y2 = [int(x) for x in bbox]
+        conf = float(row.get('confidence', 0))
+        color = COLORS.get(str(cls), (255, 165, 0))
+        tid = row.get('tracking_id')
+        dist = row.get('distance_meters')
+        if tid is not None and dist is not None:
+            label = f"ID{tid} {cls} {dist:.2f}m {conf:.2f}"
+        elif tid is not None:
+            label = f"ID{tid} {cls}: {conf:.2f}"
+        else:
+            label = f"{cls}: {conf:.2f}"
+
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+        label_y = max(y1 - 8, label_size[1] + 8)
+        cv2.rectangle(
+            annotated,
+            (x1, label_y - label_size[1] - 4),
+            (x1 + label_size[0] + 2, label_y + 4),
+            color,
+            -1,
+        )
+        cv2.putText(
+            annotated,
+            label,
+            (x1, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            2,
+        )
+    return annotated
+
+
+def _public_upload_url(filename: str) -> str:
+    """Relative URL so Vite dev proxy (/api -> :5000) and production both work."""
+    return f'/api/uploads/{filename}'
+
+
+def _open_video_writer(output_path: str, fps: float, frame_size: tuple) -> cv2.VideoWriter:
+    """Pick a browser-friendly MP4 codec when OpenCV supports it (fallback: mp4v)."""
+    width, height = frame_size
+    for fourcc_str in ('avc1', 'H264', 'mp4v'):
+        fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
+        writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        if writer.isOpened():
+            return writer
+        writer.release()
+    return cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+
+
+def _merge_tracking_into_raw_defects(
+    raw_defects: List[Dict[str, Any]],
+    tracked_rows: List[Dict[str, Any]],
+    iou_threshold: float = 0.15,
+) -> List[Dict[str, Any]]:
+    """Attach tracking_id and distance_meters to each raw YOLO row for API backward compatibility."""
+    out = []
+    for d in raw_defects:
+        row = dict(d)
+        bb = d.get('bbox')
+        if not bb:
+            out.append(row)
+            continue
+        best_iou = iou_threshold
+        best_tid = None
+        best_dist = None
+        for t in tracked_rows:
+            if t.get('class_name') != d.get('class'):
+                continue
+            tb = t.get('bounding_box')
+            if not tb:
+                continue
+            iou = bbox_iou([float(x) for x in bb], [float(x) for x in tb])
+            if iou >= best_iou:
+                best_iou = iou
+                best_tid = t.get('tracking_id')
+                best_dist = t.get('distance_meters')
+        if best_tid is not None:
+            row['tracking_id'] = best_tid
+            row['distance_meters'] = best_dist
+        out.append(row)
+    return out
+
+
+def annotate_frame(frame, conf_threshold=0.25):
+    """Single-frame YOLO + draw (no tracking)."""
+    defects, frame_w, frame_h = run_yolo_detection(frame, conf_threshold)
+    rows = [{**d, 'class_name': d['class'], 'bounding_box': d['bbox']} for d in defects]
+    annotated = annotate_from_detections(frame, rows)
     return annotated, defects, frame_w, frame_h
 
 @app.route('/api/auth/login', methods=['POST'])
@@ -268,8 +416,11 @@ def analyze_image():
 
             annotated_video_filename = f"annotated_{Path(filename).stem}.mp4"
             annotated_video_path = os.path.join(app.config['UPLOAD_FOLDER'], annotated_video_filename)
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            writer = cv2.VideoWriter(annotated_video_path, fourcc, fps, (img_width, img_height))
+            writer = _open_video_writer(
+                annotated_video_path,
+                float(fps),
+                (img_width, img_height),
+            )
 
             if not writer.isOpened():
                 cap.release()
@@ -299,8 +450,10 @@ def analyze_image():
             if frame_idx == 0:
                 return jsonify({'message': 'No frames could be read from the video'}), 400
 
-            # Build URL for frontend access
-            annotated_video_url = url_for('serve_uploaded_file', filename=annotated_video_filename, _external=True)
+            if not os.path.isfile(annotated_video_path) or os.path.getsize(annotated_video_path) < 1024:
+                return jsonify({'message': 'Annotated video file was not created or is empty'}), 500
+
+            annotated_video_url = _public_upload_url(annotated_video_filename)
         else:
             img = cv2.imread(filepath)
             if img is None:
@@ -345,7 +498,7 @@ def analyze_image():
 @app.route('/api/live/start', methods=['POST'])
 @token_required
 def start_live_stream():
-    global live_camera, live_streaming_active, LIVE_CAMERA_INDEX
+    global live_camera, live_streaming_active, LIVE_CAMERA_INDEX, live_pipeline, PIXEL_TO_CM_RATIO
     if model is None:
         return jsonify({'message': 'Model not loaded'}), 500
 
@@ -356,6 +509,18 @@ def start_live_stream():
     except (TypeError, ValueError):
         return jsonify({'message': 'cameraIndex must be an integer'}), 400
 
+    pixel_ratio = payload.get('pixelToCmRatio', PIXEL_TO_CM_RATIO)
+    try:
+        pixel_ratio = float(pixel_ratio)
+    except (TypeError, ValueError):
+        return jsonify({'message': 'pixelToCmRatio must be a number (cm per pixel)'}), 400
+
+    speed = payload.get('machineSpeedMps', DEFAULT_MACHINE_SPEED_MPS)
+    try:
+        speed = float(speed)
+    except (TypeError, ValueError):
+        return jsonify({'message': 'machineSpeedMps must be a number (meters per second)'}), 400
+
     with live_lock:
         # If source changes, release old camera first.
         if requested_camera_index != LIVE_CAMERA_INDEX and live_camera is not None:
@@ -365,34 +530,42 @@ def start_live_stream():
 
         LIVE_CAMERA_INDEX = requested_camera_index
         if live_camera is None or not live_camera.isOpened():
-            live_camera = cv2.VideoCapture(LIVE_CAMERA_INDEX)
+            live_camera = _open_local_camera(LIVE_CAMERA_INDEX)
             if not live_camera.isOpened():
                 live_camera = None
                 return jsonify({
                     'message': f'Failed to open camera index {LIVE_CAMERA_INDEX}. Check roller camera connection.'
                 }), 500
         live_streaming_active = True
+        PIXEL_TO_CM_RATIO = pixel_ratio
+        live_pipeline = FabricInspectionPipeline(
+            pixel_to_cm_ratio=pixel_ratio,
+            machine_speed_mps=speed,
+        )
 
     return jsonify({
         'message': 'Live stream started',
         'cameraIndex': LIVE_CAMERA_INDEX,
+        'pixelToCmRatio': pixel_ratio,
+        'machineSpeedMps': speed,
     }), 200
 
 
 @app.route('/api/live/stop', methods=['POST'])
 @token_required
 def stop_live_stream():
-    global live_camera, live_streaming_active
+    global live_camera, live_streaming_active, live_pipeline
     with live_lock:
         live_streaming_active = False
         if live_camera is not None and live_camera.isOpened():
             live_camera.release()
         live_camera = None
+        live_pipeline = None
     return jsonify({'message': 'Live stream stopped'}), 200
 
 
 def live_frame_generator():
-    global live_camera, live_streaming_active, live_frame_id, live_latest_payload
+    global live_camera, live_streaming_active, live_frame_id, live_latest_payload, live_pipeline
     while True:
         with live_lock:
             if not live_streaming_active or live_camera is None or not live_camera.isOpened():
@@ -404,14 +577,37 @@ def live_frame_generator():
             continue
 
         try:
-            annotated, defects, _, _ = annotate_frame(frame, conf_threshold=0.25)
+            frame_ts = datetime.datetime.utcnow()
+            defects, _, _ = run_yolo_detection(frame, conf_threshold=0.25)
+
+            with live_lock:
+                pl = live_pipeline
+
+            if pl is not None:
+                track_out = pl.process_frame(defects, frame_ts)
+                tracked_defects = track_out['tracked_defects']
+                log_once_events = track_out['log_once_events']
+                roll_distance_m = track_out['roll_distance_meters']
+                annotated = annotate_from_detections(frame, tracked_defects)
+                merged_defects = _merge_tracking_into_raw_defects(defects, tracked_defects)
+            else:
+                tracked_defects = []
+                log_once_events = []
+                roll_distance_m = 0.0
+                rows = [{**d, 'class_name': d['class'], 'bounding_box': d['bbox']} for d in defects]
+                annotated = annotate_from_detections(frame, rows)
+                merged_defects = defects
+
             with live_lock:
                 live_frame_id += 1
                 live_latest_payload = {
                     'frameId': live_frame_id,
-                    'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
+                    'timestamp': frame_ts.isoformat() + 'Z',
                     'cameraIndex': LIVE_CAMERA_INDEX,
-                    'defects': defects,
+                    'defects': merged_defects,
+                    'tracked_defects': tracked_defects,
+                    'log_once_events': log_once_events,
+                    'roll_distance_meters': roll_distance_m,
                 }
             success, buffer = cv2.imencode('.jpg', annotated)
             if not success:
@@ -451,10 +647,10 @@ def live_sources():
         'activeCameraIndex': LIVE_CAMERA_INDEX,
         'defaultCameraIndex': DEFAULT_CAMERA_INDEX,
         'sources': [
-            {'label': 'Laptop Camera (0)', 'cameraIndex': 0},
-            {'label': 'USB/External Camera (1)', 'cameraIndex': 1},
-            {'label': 'Arducam / CSI Camera (2)', 'cameraIndex': 2},
-            {'label': 'Custom Camera (3)', 'cameraIndex': 3},
+            {'label': 'Built-in webcam (0)', 'cameraIndex': 0},
+            {'label': 'USB / DroidCam or iVCam phone (1)', 'cameraIndex': 1},
+            {'label': 'Arducam / CSI / extra camera (2)', 'cameraIndex': 2},
+            {'label': 'Custom index (3)', 'cameraIndex': 3},
         ],
     }), 200
 
@@ -497,10 +693,19 @@ def get_defect_distribution():
         {'name': 'stain', 'value': 20},
     ]), 200
 
+@app.route('/api/uploads/<path:filename>', methods=['GET'])
 @app.route('/uploads/<path:filename>', methods=['GET'])
 def serve_uploaded_file(filename):
-    """Serve files from the uploads directory"""
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=False)
+    """Serve annotated media; ?download=1 forces browser download."""
+    download = request.args.get('download', '').lower() in ('1', 'true', 'yes')
+    mime, _ = mimetypes.guess_type(filename)
+    return send_from_directory(
+        app.config['UPLOAD_FOLDER'],
+        filename,
+        mimetype=mime or 'application/octet-stream',
+        as_attachment=download,
+        download_name=Path(filename).name if download else None,
+    )
 
 @app.route('/api/analytics/defect-trends', methods=['GET'])
 @token_required

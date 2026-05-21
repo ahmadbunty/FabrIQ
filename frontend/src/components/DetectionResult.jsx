@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import {
   Paper,
   Typography,
@@ -7,12 +8,43 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
+  Button,
 } from '@mui/material'
-import { CheckCircle, Cancel, ExpandMore, LocationOn } from '@mui/icons-material'
+import { CheckCircle, Cancel, ExpandMore, LocationOn, Download } from '@mui/icons-material'
+import toast from 'react-hot-toast'
 import { formatDefectLabel } from '../api/defectsApi'
+import { resolveUploadMediaUrl } from '../utils/api'
 
 export default function DetectionResult({ results }) {
   const { defects = [], annotatedImage, annotatedVideo, imageWidth, imageHeight, isVideo } = results
+  const videoSrc = useMemo(() => resolveUploadMediaUrl(annotatedVideo), [annotatedVideo])
+  const videoDownloadUrl = useMemo(
+    () => (videoSrc ? `${videoSrc}${videoSrc.includes('?') ? '&' : '?'}download=1` : null),
+    [videoSrc]
+  )
+
+  const handleDownloadVideo = async () => {
+    if (!videoDownloadUrl) {
+      toast.error('No annotated video available to download')
+      return
+    }
+    try {
+      const response = await fetch(videoDownloadUrl)
+      if (!response.ok) throw new Error(`Download failed (${response.status})`)
+      const blob = await response.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = objectUrl
+      anchor.download = 'fabriq_annotated_video.mp4'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(objectUrl)
+      toast.success('Annotated video download started')
+    } catch (err) {
+      toast.error(err.message || 'Could not download annotated video')
+    }
+  }
 
   return (
     <Paper sx={{ p: 3 }}>
@@ -42,14 +74,25 @@ export default function DetectionResult({ results }) {
           )}
         </Box>
       )}
-      {isVideo && annotatedVideo && (
+      {isVideo && videoSrc && (
         <Box sx={{ mb: 2 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>
-            Annotated Video
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
+              Annotated Video
+            </Typography>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<Download />}
+              onClick={handleDownloadVideo}
+            >
+              Download MP4
+            </Button>
+          </Box>
           <video
-            src={annotatedVideo}
+            src={videoSrc}
             controls
+            preload="metadata"
             style={{ width: '100%', borderRadius: 8, border: '2px solid #1976d2' }}
           />
         </Box>
